@@ -1,43 +1,97 @@
-// Checks the two Supabase settings from your .env.local file.
-// Returns null when they look fine, or a plain-English message when something is wrong.
-// It also REFUSES secret keys, so a powerful key can never end up inside the website.
+// Pure ticket rules. No React and no storage in this file, so it is easy to test.
 
-function jwtRole(key) {
-  const parts = key.split(".");
-  if (parts.length !== 3) return null;
-  try {
-    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-    return JSON.parse(atob(padded)).role ?? null;
-  } catch {
-    return null;
-  }
+export const STATUSES = ["Open", "In Progress", "Resolved"];
+
+export const CATEGORIES = [
+  "Password / Account",
+  "Network / Wi-Fi",
+  "Hardware",
+  "Software",
+  "Printer",
+  "Email",
+  "Other",
+];
+
+export const LIMITS = { name: 60, description: 1000, minDescription: 10 };
+
+// Makes the next ID, like HD-0006, by looking at the highest ID already used.
+export function generateTicketId(tickets) {
+  const highest = tickets.reduce((max, t) => {
+    const n = parseInt(String(t.id).replace("HD-", ""), 10);
+    return Number.isFinite(n) && n > max ? n : max;
+  }, 0);
+  return "HD-" + String(highest + 1).padStart(4, "0");
 }
 
-export function checkSupabaseConfig(url, key) {
-  const u = (url || "").trim();
-  const k = (key || "").trim();
+// Checks the form. Returns an object of error messages (empty object = valid).
+export function validateTicketInput({ name, category, description }) {
+  const errors = {};
+  const n = (name || "").trim();
+  const d = (description || "").trim();
+  if (!n) errors.name = "Please enter your name.";
+  else if (n.length > LIMITS.name) errors.name = `Name must be ${LIMITS.name} characters or fewer.`;
+  if (!CATEGORIES.includes(category)) errors.category = "Please choose an issue category.";
+  if (!d) errors.description = "Please describe the issue.";
+  else if (d.length < LIMITS.minDescription)
+    errors.description = `Please add a little more detail (at least ${LIMITS.minDescription} characters).`;
+  else if (d.length > LIMITS.description)
+    errors.description = `Description must be ${LIMITS.description} characters or fewer.`;
+  return errors;
+}
 
-  if (!u || !k) {
-    return "The Supabase project URL or publishable key is missing from your .env.local file.";
-  }
-  if (/YOUR[-_]/i.test(u) || /YOUR[-_]/i.test(k)) {
-    return "Your .env.local file still contains the placeholder text from .env.example. Replace it with your real project URL and publishable key.";
-  }
-  if (k.startsWith("sb_secret_") || jwtRole(k) === "service_role") {
-    return "That key is a SECRET key. Secret keys must never be used in a website. Use the publishable key (it starts with sb_publishable_) instead.";
-  }
-  let parsed;
-  try {
-    parsed = new URL(u);
-  } catch {
-    return "The project URL is not a valid web address. It should look like https://abcdefgh.supabase.co";
-  }
-  if (parsed.protocol !== "https:") {
-    return "The project URL must start with https://";
-  }
-  if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
-    return "The project URL should be just the address, like https://abcdefgh.supabase.co, with nothing after it.";
-  }
-  return null;
+// Builds a brand-new ticket with an automatic ID, timestamp, and "Open" status.
+export function buildTicket(input, existingTickets, now = new Date()) {
+  const stamp = now.toISOString();
+  return {
+    id: generateTicketId(existingTickets),
+    name: input.name.trim(),
+    category: input.category,
+    description: input.description.trim(),
+    status: "Open",
+    createdAt: stamp,
+    updatedAt: stamp,
+  };
+}
+
+// Returns a copy of the ticket list with one ticket's status changed.
+export function applyStatusChange(tickets, id, newStatus, now = new Date()) {
+  if (!STATUSES.includes(newStatus)) throw new Error("Invalid status: " + newStatus);
+  const found = tickets.some((t) => t.id === id);
+  if (!found) throw new Error("Ticket not found: " + id);
+  return tickets.map((t) =>
+    t.id === id ? { ...t, status: newStatus, updatedAt: now.toISOString() } : t
+  );
+}
+
+// Filters by status and by search text (ID, name, category, or description).
+export function filterTickets(tickets, { status = "All", search = "" } = {}) {
+  const q = search.trim().toLowerCase();
+  return tickets.filter((t) => {
+    if (status !== "All" && t.status !== status) return false;
+    if (!q) return true;
+    return [t.id, t.name, t.category, t.description].some((v) => v.toLowerCase().includes(q));
+  });
+}
+
+// Newest tickets first.
+export function sortNewestFirst(tickets) {
+  return [...tickets].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+export function countByStatus(tickets) {
+  const counts = { Open: 0, "In Progress": 0, Resolved: 0 };
+  tickets.forEach((t) => {
+    if (counts[t.status] !== undefined) counts[t.status] += 1;
+  });
+  return counts;
+}
+
+export function formatDateTime(iso) {
+  return new Date(iso).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
